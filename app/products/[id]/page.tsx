@@ -57,7 +57,7 @@ export default function ProductPage() {
     }
   }
 
-  const handleGenerateLicense = async (e: React.FormEvent) => {
+ const handleGenerateLicense = async (e: React.FormEvent) => {
     e.preventDefault()
     setGenerating(true)
 
@@ -71,14 +71,19 @@ export default function ProductPage() {
         activationLimit: 1,
       })
 
+      // 1. Save the key to state so it appears on screen
       setGeneratedKey(response.data.licenseKey)
       toast.success('License generated!')
+      
+      // 2. Close the modal and reset the form immediately
       setExpirationDays(30)
-      setTimeout(() => {
-        fetchData()
-        setGeneratedKey('')
-        setShowGenerateModal(false)
-      }, 2000)
+      setShowGenerateModal(false)
+
+      // 3. Update the table list in the background
+      fetchData()
+
+      // (Notice we removed the setTimeout that was deleting the key!)
+
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to generate license')
     } finally {
