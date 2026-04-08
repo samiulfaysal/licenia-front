@@ -17,6 +17,7 @@ interface License {
   activationLimit: number
   activationCount: number
   activations: any[]
+  product: { id: number | string; name: string } // <-- Add this line!
 }
 
 interface Product {
