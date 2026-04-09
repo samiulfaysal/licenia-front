@@ -6,7 +6,7 @@ import Navbar from '@/components/Navbar'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import apiClient from '@/lib/api'
 import toast from 'react-hot-toast'
-import { Plus, Code, Copy, Download, Trash2, Eye, EyeOff } from 'lucide-react'
+import { Plus, Code, Copy, Trash2, Check } from 'lucide-react' // Added Check
 import Link from 'next/link'
 
 interface License {
@@ -17,7 +17,7 @@ interface License {
   activationLimit: number
   activationCount: number
   activations: any[]
-  product: { id: number | string; name: string } // <-- Add this line!
+  product: { id: number | string; name: string }
 }
 
 interface Product {
@@ -32,11 +32,16 @@ export default function ProductPage() {
   const [product, setProduct] = useState<Product | null>(null)
   const [licenses, setLicenses] = useState<License[]>([])
   const [loading, setLoading] = useState(true)
+  
+  // Modal States
   const [showGenerateModal, setShowGenerateModal] = useState(false)
+  const [showIntegrationModal, setShowIntegrationModal] = useState(false)
+  
+  // Action States
   const [expirationDays, setExpirationDays] = useState(30)
   const [generating, setGenerating] = useState(false)
   const [generatedKey, setGeneratedKey] = useState('')
-  const [showKey, setShowKey] = useState(false)
+  const [copiedCode, setCopiedCode] = useState(false)
 
   useEffect(() => {
     fetchData()
@@ -57,7 +62,7 @@ export default function ProductPage() {
     }
   }
 
- const handleGenerateLicense = async (e: React.FormEvent) => {
+  const handleGenerateLicense = async (e: React.FormEvent) => {
     e.preventDefault()
     setGenerating(true)
 
@@ -71,19 +76,12 @@ export default function ProductPage() {
         activationLimit: 1,
       })
 
-      // 1. Save the key to state so it appears on screen
       setGeneratedKey(response.data.licenseKey)
       toast.success('License generated!')
       
-      // 2. Close the modal and reset the form immediately
       setExpirationDays(30)
       setShowGenerateModal(false)
-
-      // 3. Update the table list in the background
       fetchData()
-
-      // (Notice we removed the setTimeout that was deleting the key!)
-
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to generate license')
     } finally {
@@ -92,15 +90,11 @@ export default function ProductPage() {
   }
   
   const handleDeleteLicense = async (licenseId: number) => {
-    // 1. Ask for confirmation so you don't accidentally click it
     if (!window.confirm('Are you sure you want to revoke this license?')) return;
 
     try {
-      // 2. Call your backend DELETE route
       await apiClient.delete(`/licenses/${licenseId}`);
       toast.success('License revoked successfully!');
-      
-      // 3. Refresh the table to show the updated status
       fetchData();
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to revoke license');
@@ -111,6 +105,109 @@ export default function ProductPage() {
     navigator.clipboard.writeText(text)
     toast.success('Copied to clipboard!')
   }
+
+  // --- NEW: Dynamic Integration Code Template ---
+  const integrationCode = `<?php
+/**
+ * Licenia SaaS - WordPress Client Integration
+ * Automatically generated for Product ID: ${productId}
+ */
+
+define('LICENIA_API_URL', 'https://licenia-back.onrender.com/api/licenses/validate');
+define('LICENIA_PRODUCT_ID', '${productId}'); 
+
+// 1. Create the Settings Menu
+add_action('admin_menu', 'licenia_register_settings_page');
+function licenia_register_settings_page() {
+    add_options_page(
+        'Product License', 
+        'Product License', 
+        'manage_options', 
+        'licenia-license-settings', 
+        'licenia_render_settings_page'
+    );
+}
+
+// 2. Render the Settings Page UI
+function licenia_render_settings_page() {
+    if (isset($_POST['licenia_license_key']) && check_admin_referer('licenia_save_license')) {
+        $new_key = sanitize_text_field($_POST['licenia_license_key']);
+        update_option('licenia_saved_license_key', $new_key);
+        delete_transient('licenia_license_status');
+        echo '<div class="notice notice-success is-dismissible"><p>License key saved and checked!</p></div>';
+    }
+
+    $current_key = get_option('licenia_saved_license_key', '');
+    $status = licenia_check_license_status();
+    ?>
+    <div class="wrap">
+        <h2>Activate Your Product</h2>
+        <?php if ($status === true): ?>
+            <div class="notice notice-success inline"><p>✅ <strong>Active:</strong> Your product is fully licensed.</p></div>
+        <?php else: ?>
+            <div class="notice notice-error inline"><p>❌ <strong>Inactive:</strong> Please enter a valid license key.</p></div>
+        <?php endif; ?>
+
+        <form method="POST" action="">
+            <?php wp_nonce_field('licenia_save_license'); ?>
+            <table class="form-table">
+                <tr>
+                    <th scope="row"><label for="licenia_license_key">License Key</label></th>
+                    <td>
+                        <input type="text" name="licenia_license_key" id="licenia_license_key" 
+                               value="<?php echo esc_attr($current_key); ?>" class="regular-text">
+                        <p class="description">Enter the license key provided in your dashboard.</p>
+                    </td>
+                </tr>
+            </table>
+            <?php submit_button('Activate License'); ?>
+        </form>
+    </div>
+    <?php
+}
+
+// 3. The Core API Communicator
+function licenia_check_license_status() {
+    $license_key = get_option('licenia_saved_license_key');
+    if (empty($license_key)) return false;
+
+    $cached_status = get_transient('licenia_license_status');
+    if ($cached_status !== false) return $cached_status === 'valid';
+
+    $domain = isset($_SERVER['SERVER_NAME']) ? $_SERVER['SERVER_NAME'] : site_url();
+    $body = json_encode([
+        'licenseKey' => $license_key,
+        'productId' => intval(LICENIA_PRODUCT_ID),
+        'domain' => str_replace(['http://', 'https://', 'www.'], '', $domain)
+    ]);
+
+    $response = wp_remote_post(LICENIA_API_URL, [
+        'headers' => ['Content-Type' => 'application/json', 'Accept' => 'application/json'],
+        'body' => $body,
+        'timeout' => 15
+    ]);
+
+    if (is_wp_error($response)) return false;
+
+    $http_code = wp_remote_retrieve_response_code($response);
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+
+    if ($http_code === 200 && isset($data['valid']) && $data['valid'] === true) {
+        set_transient('licenia_license_status', 'valid', 12 * HOUR_IN_SECONDS);
+        return true;
+    } else {
+        set_transient('licenia_license_status', 'invalid', 1 * HOUR_IN_SECONDS);
+        return false;
+    }
+}
+?>`;
+
+  const copyIntegrationCode = () => {
+    navigator.clipboard.writeText(integrationCode);
+    setCopiedCode(true);
+    toast.success('Integration code copied!');
+    setTimeout(() => setCopiedCode(false), 2000);
+  };
 
   if (loading) return <ProtectedRoute><Navbar /><div className="text-center py-12">Loading...</div></ProtectedRoute>
 
@@ -123,21 +220,31 @@ export default function ProductPage() {
           ← Back to Dashboard
         </Link>
 
-        {/* Product Header */}
-        <div className="mb-8">
-          <h1 className="text-4xl font-bold text-white mb-2">{product?.name}</h1>
-          <p className="text-slate-400">{product?.description || 'No description'}</p>
-        </div>
+        {/* Product Header & Action Buttons */}
+        <div className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div>
+            <h1 className="text-4xl font-bold text-white mb-2">{product?.name}</h1>
+            <p className="text-slate-400">{product?.description || 'No description'}</p>
+          </div>
+          
+          <div className="flex gap-3">
+            {/* NEW: Integration Button */}
+            <button
+              onClick={() => setShowIntegrationModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white border border-slate-700 rounded hover:bg-slate-700 transition-colors"
+            >
+              <Code className="w-4 h-4" />
+              <span>WordPress Code</span>
+            </button>
 
-        {/* Generate Button */}
-        <div className="mb-8">
-          <button
-            onClick={() => setShowGenerateModal(true)}
-            className="flex items-center space-x-2 btn-primary"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Generate License</span>
-          </button>
+            <button
+              onClick={() => setShowGenerateModal(true)}
+              className="flex items-center space-x-2 btn-primary"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Generate License</span>
+            </button>
+          </div>
         </div>
 
         {/* Generated Key Display */}
@@ -213,7 +320,11 @@ export default function ProductPage() {
         {/* Generate Modal */}
         {showGenerateModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="glass p-8 max-w-md w-full mx-4">
+            <div className="glass p-8 max-w-md w-full mx-4 relative">
+              <button 
+                onClick={() => setShowGenerateModal(false)}
+                className="absolute top-4 right-4 text-slate-400 hover:text-white"
+              >✕</button>
               <h2 className="text-2xl font-bold text-white mb-6">Generate License</h2>
               <form onSubmit={handleGenerateLicense} className="space-y-4">
                 <div>
@@ -232,18 +343,58 @@ export default function ProductPage() {
                   <button type="submit" disabled={generating} className="flex-1 btn-primary disabled:opacity-50">
                     {generating ? 'Generating...' : 'Generate'}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowGenerateModal(false)}
-                    className="flex-1 btn-secondary"
-                  >
-                    Cancel
-                  </button>
                 </div>
               </form>
             </div>
           </div>
         )}
+
+        {/* NEW: Integration Code Modal */}
+        {showIntegrationModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+            <div className="glass w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+              <div className="p-6 border-b border-slate-700 flex justify-between items-center bg-slate-900/50">
+                <div>
+                  <h2 className="text-xl font-semibold text-white">
+                    WordPress Integration Code
+                  </h2>
+                  <p className="text-sm text-slate-400 mt-1">
+                    Copy this code into your plugin or theme's <code className="bg-slate-800 px-1 rounded text-blue-300">functions.php</code> file.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowIntegrationModal(false)}
+                  className="text-slate-400 hover:text-white transition-colors text-xl font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto flex-1 bg-[#0d1117]">
+                <pre className="text-sm text-green-400 font-mono whitespace-pre-wrap break-all">
+                  <code>{integrationCode}</code>
+                </pre>
+              </div>
+
+              <div className="p-4 border-t border-slate-700 bg-slate-900/50 flex justify-end gap-3">
+                <button
+                  onClick={() => setShowIntegrationModal(false)}
+                  className="px-4 py-2 text-slate-300 hover:bg-slate-800 rounded transition-colors"
+                >
+                  Close
+                </button>
+                <button
+                  onClick={copyIntegrationCode}
+                  className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors flex items-center gap-2"
+                >
+                  {copiedCode ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  {copiedCode ? 'Copied!' : 'Copy Code'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
     </ProtectedRoute>
   )
