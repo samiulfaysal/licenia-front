@@ -90,7 +90,23 @@ export default function ProductPage() {
       setGenerating(false)
     }
   }
+  
+  const handleDeleteLicense = async (licenseId: number) => {
+    // 1. Ask for confirmation so you don't accidentally click it
+    if (!window.confirm('Are you sure you want to revoke this license?')) return;
 
+    try {
+      // 2. Call your backend DELETE route
+      await apiClient.delete(`/licenses/${licenseId}`);
+      toast.success('License revoked successfully!');
+      
+      // 3. Refresh the table to show the updated status
+      fetchData();
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || 'Failed to revoke license');
+    }
+  }
+  
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
     toast.success('Copied to clipboard!')
@@ -178,9 +194,13 @@ export default function ProductPage() {
                         {license.expiresAt ? new Date(license.expiresAt).toLocaleDateString() : 'Never'}
                       </td>
                       <td className="px-6 py-4">
-                        <button className="text-slate-400 hover:text-red-400 transition-colors">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                      <button 
+                        onClick={() => handleDeleteLicense(license.id)}
+                        title="Revoke License"
+                        className="text-slate-400 hover:text-red-400 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                       </td>
                     </tr>
                   ))}
